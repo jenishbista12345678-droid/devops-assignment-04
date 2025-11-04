@@ -1,0 +1,66 @@
+name: CI - Build & Run Docker Compose
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create .env from secrets (debuggable)
+        run: |
+          echo "APP_MESSAGE=${{ secrets.APP_MESSAGE }}" > .env
+          echo "APP_HEALTH=${{ secrets.APP_HEALTH }}" >> .env
+          echo "FLASK_ENV=production" >> .env
+
+      - name: Show created .env (debug)
+        run: |
+          echo "--- .env contents begin ---"
+          cat .env || true
+          echo "--- .env contents end ---"
+
+      - name: Install docker-compose plugin
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl
+          # Install docker-compose plugin (v2)
+          DOCKER_COMPOSE_PATH=/usr/libexec/docker/cli-plugins/docker-compose
+          sudo mkdir -p $(dirname "$DOCKER_COMPOSE_PATH")
+          sudo curl -SL "https://github.com/docker/compose/releases/download/v2.18.1/docker-compose-linux-x86_64" -o $DOCKER_COMPOSE_PATH
+          sudo chmod +x $DOCKER_COMPOSE_PATH
+          docker compose version
+
+      - name: Build and run with docker compose
+        run: |
+          docker compose up -d --build
+
+      - name: Wait for app
+        run: |
+          echo "Waiting for container to start..."
+          for i in {1..15}; do
+            if curl -sSf http://localhost:5000/ >/dev/null 2>&1; then
+              echo "app is responding"
+              break
+            fi
+            echo "not ready yet..."
+            sleep 2
+          done
+
+      - name: Test endpoints
+        run: |
+          echo "GET /"
+          curl -sS http://localhost:5000/ || true
+          echo "\nGET /health"
+          curl -sS http://localhost:5000/health || true
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker compose down --volumes
